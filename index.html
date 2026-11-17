@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="My Life">
+<meta name="theme-color" content="#0d0c0b">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="stylesheet" href="fonts.css">
+<title>My Life</title>
+<!--
+  Замок приложения My Life. Сам дашборд лежит рядом зашифрованным (app.bin, AES-256-GCM).
+  Ключ живёт только в ссылке после «#k=» (браузер не отправляет эту часть на сервер) и в телефоне.
+-->
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; min-height: 100%; background: #0d0c0b; }
+  body {
+    display: grid; place-items: center; box-sizing: border-box;
+    min-height: 100vh; min-height: 100dvh;
+    padding: calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));
+    color: #f6f2ec; font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    background:
+      radial-gradient(70% 55% at 90% -8%, rgba(255, 118, 38, .45), transparent 62%),
+      radial-gradient(55% 45% at -6% 108%, rgba(255, 138, 61, .24), transparent 66%),
+      #0d0c0b;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .ml { width: min(340px, 100%); text-align: center; }
+  .ml-icon { width: 104px; height: 104px; border-radius: 24px; box-shadow: 0 22px 60px rgba(255, 110, 40, .32); }
+  .ml-name { margin: 20px 0 8px; font: 600 28px/1.1 "LD Unbounded", -apple-system, sans-serif; letter-spacing: -.01em; }
+  .ml-status { margin: 0; min-height: 1.45em; color: #aaa29a; }
+  .ml-status.is-loading::after { content: ""; display: inline-block; width: 1.2em; text-align: left; animation: ml-dots 1.2s steps(4) infinite; }
+  @keyframes ml-dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+  .ml-form { display: grid; gap: 10px; margin-top: 24px; }
+  .ml-form[hidden], .ml-retry[hidden] { display: none; }
+  .ml-input {
+    height: 50px; padding: 0 16px; border-radius: 16px; border: 1px solid rgba(255, 255, 255, .14);
+    background: rgba(255, 255, 255, .06); color: inherit; font: inherit; font-size: 16px;
+  }
+  .ml-input:focus { outline: 2px solid #ffd23f; outline-offset: 1px; }
+  .ml-btn {
+    height: 50px; margin-top: 0; border: 0; border-radius: 999px; cursor: pointer;
+    background: #f6f2ec; color: #1b1009; font: 600 16px/1 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  }
+  .ml-retry { margin-top: 24px; width: 100%; }
+  @media (prefers-reduced-motion: reduce) { .ml-status.is-loading::after { animation: none; content: "…"; } }
+</style>
+</head>
+<body>
+<main class="ml">
+  <img class="ml-icon" src="icon-180.png" alt="">
+  <h1 class="ml-name">My Life</h1>
+  <p class="ml-status is-loading" id="ml-status" role="status">Открываю</p>
+  <form class="ml-form" id="ml-form" hidden>
+    <input class="ml-input" id="ml-key" type="password" autocomplete="off" autocapitalize="off" autocorrect="off"
+      spellcheck="false" placeholder="Ссылка или ключ" aria-label="Ссылка или ключ">
+    <button class="ml-btn" type="submit">Открыть</button>
+  </form>
+  <button class="ml-btn ml-retry" id="ml-retry" type="button" hidden>Попробовать ещё раз</button>
+</main>
+<script>
+  (() => {
+    const STORE = 'my-life-key';
+    const $status = document.getElementById('ml-status');
+    const $form = document.getElementById('ml-form');
+    const $input = document.getElementById('ml-key');
+    const $retry = document.getElementById('ml-retry');
+
+    const say = (text, loading) => { $status.textContent = text; $status.classList.toggle('is-loading', !!loading); };
+    const keyFrom = (s) => {
+      s = String(s || '').trim();
+      const m = s.match(/(?:^|[#&?])k=([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/);
+      if (m) return m[1];
+      return /^[A-Za-z0-9_-]{43}$/.test(s) ? s : null;
+    };
+    const saved = {
+      get() { try { return localStorage.getItem(STORE); } catch (e) { return null; } },
+      set(v) { try { localStorage.setItem(STORE, v); } catch (e) {} },
+      drop() { try { localStorage.removeItem(STORE); } catch (e) {} },
+    };
+    const bytes = (b64url) => Uint8Array.from(atob(b64url.replace(/-/g, '+').replace(/_/g, '/') + '='), (c) => c.charCodeAt(0));
+    const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+    function askKey(text) {
+      say(text);
+      $retry.hidden = true;
+      $form.hidden = false;
+    }
+
+    async function open(k) {
+      $form.hidden = true;
+      $retry.hidden = true;
+      say('Открываю', true);
+      if (!window.crypto || !crypto.subtle || typeof DecompressionStream === 'undefined') {
+        say('Этот браузер слишком старый. Открой в Safari на iPhone.');
+        return;
+      }
+      let buf;
+      try {
+        const res = await fetch('app.bin?t=' + Date.now(), { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        buf = await res.arrayBuffer();
+      } catch (e) {
+        say('Нет связи. Проверь интернет.');
+        $retry.hidden = false;
+        $retry.onclick = () => open(k);
+        return;
+      }
+      let html;
+      try {
+        const key = await crypto.subtle.importKey('raw', bytes(k), 'AES-GCM', false, ['decrypt']);
+        const all = new Uint8Array(buf);
+        const gz = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: all.slice(0, 12) }, key, all.slice(12));
+        html = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+      } catch (e) {
+        saved.drop();
+        askKey('Ключ не подошёл. Вставь ссылку с ключом ещё раз.');
+        return;
+      }
+      saved.set(k);
+      // key — чтобы кнопки внутри могли зашифровать нажатия тем же ключом.
+      const meta = { hash: hex(await crypto.subtle.digest('SHA-256', buf)), at: Date.now(), key: k };
+      html = html.replace('<head>', () => '<head><script>window.__ML=' + JSON.stringify(meta) + '<\/script>');
+      document.open();
+      document.write(html);
+      document.close();
+    }
+
+    $form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const k = keyFrom($input.value);
+      if (k) open(k);
+      else say('Это не похоже на ключ. Нужна ссылка, где в конце есть «#k=…».');
+    });
+
+    const k = keyFrom(location.hash) || saved.get();
+    if (k) open(k);
+    else askKey('Это личное приложение. Открой его по своей ссылке или вставь её сюда.');
+  })();
+</script>
+</body>
+</html>
